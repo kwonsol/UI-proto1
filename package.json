@@ -1,0 +1,10 @@
+{
+  "name": "scent-vector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "향수 노트 벡터 기반 향 취향 결정론적 시각화 프로토타입",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test test/engine.test.js"
+  }
+}
