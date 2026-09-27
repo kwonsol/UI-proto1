@@ -4,7 +4,9 @@
   const E = window.ScentEngine;
   const R = window.ScentRender;
   const F = E.FAMILIES;
-  const CANVAS_SIZE = 640; // 고정 내부 해상도 → 화면 크기와 무관하게 같은 픽셀
+  const HERO_SIZE = [560, 700];   // 고정 내부 해상도 → 화면 크기와 무관하게 같은 픽셀
+  const CARD_SIZE = [360, 450];
+  const IS_ARTIFACT = !!window.__SCENT_ARTIFACT__; // 게시판(아티팩트) 빌드: 다운로드·주소 공유 불가
   const MAX_PROFILES = 4;
   const PROFILE_COLORS = ['#6a4c93', '#c0703a', '#2f8a7a', '#b0417a'];
 
@@ -88,6 +90,7 @@
     for (const [k, v] of Object.entries(attrs)) {
       if (k === 'class') n.className = v;
       else if (k === 'text') n.textContent = v;
+      else if (k === 'html') n.innerHTML = v;
       else if (k === 'style') n.style.cssText = v;
       else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
       else n.setAttribute(k, v);
@@ -97,11 +100,15 @@
   };
   const fmt = (x, d = 2) => x.toFixed(d);
   const pct = (x) => `${Math.round(x * 100)}%`;
+  const shortConc = (c) => E.concentrationLabel(c).split(' (')[1].replace(')', '');
 
   const profile = () => state.profiles[state.active];
   const perfume = () => profile().perfumes[profile().sel];
   const tasteOf = (p) => E.meanVector(p.perfumes);
-  const famColor = (i) => F[i].colors[0];
+
+  let view = 'single';
+  let paramsCache = [];            // 프로필별 computeParams(취향 벡터)
+  const refreshParams = () => { paramsCache = state.profiles.map((p) => E.computeParams(tasteOf(p))); };
 
   // ── 슬라이더 구성 ──
   const famInputs = [], famOutputs = [];
@@ -109,13 +116,12 @@
     const input = el('input', { id: `s-f${i}`, type: 'range', min: 0, max: 1, step: 0.01 });
     input.style.setProperty('--fill', fam.colors[0]);
     const out = el('output', { for: `s-f${i}` });
-    const row = el('div', { class: 'slider-row' }, [
+    $('family-sliders').append(el('div', { class: 'slider-row' }, [
       el('label', { for: `s-f${i}` }, [el('span', { class: 'swatch', style: `background:${fam.colors[0]}` }), fam.name]),
       input, out,
-    ]);
+    ]));
     input.addEventListener('input', () => setFamily(i, +input.value));
     famInputs.push(input); famOutputs.push(out);
-    $('family-sliders').append(row);
   });
 
   function setTrackFill(input) {
@@ -164,37 +170,79 @@
     p.sel = p.perfumes.length - 1;
     update();
   });
-  $('add-profile').addEventListener('click', () => {
+  function addProfile() {
     if (state.profiles.length >= MAX_PROFILES) return;
     const letter = String.fromCharCode(65 + state.profiles.length);
     state.profiles.push({ name: `사용자 ${letter}`, sel: 0, perfumes: [preset(PRESETS[(state.profiles.length * 3) % PRESETS.length].name)] });
     state.active = state.profiles.length - 1;
     update();
-  });
+  }
   $('reset').addEventListener('click', () => { state = defaultState(); update(); });
-  $('copy-link').addEventListener('click', async (e) => {
-    const url = location.href.split('#')[0] + '#' + encodeState(compactState());
-    try { await navigator.clipboard.writeText(url); e.target.textContent = '복사됨'; }
-    catch (err) { e.target.textContent = '복사 실패'; }
-    setTimeout(() => (e.target.textContent = '링크 복사'), 1400);
+  if (IS_ARTIFACT) $('copy-link').remove();
+  else {
+    $('copy-link').addEventListener('click', async (e) => {
+      const url = location.href.split('#')[0] + '#' + encodeState(compactState());
+      try { await navigator.clipboard.writeText(url); e.target.textContent = '복사됨'; }
+      catch (err) { e.target.textContent = '복사 실패'; }
+      setTimeout(() => (e.target.textContent = '링크 복사'), 1400);
+    });
+  }
+
+  document.querySelectorAll('.segmented button').forEach((b) => {
+    b.addEventListener('click', () => setView(b.dataset.view));
   });
+  function setView(v) {
+    view = v;
+    $('app').dataset.view = v;
+    document.querySelectorAll('.segmented button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === v)));
+    if (v === 'verify' && !verifyDrawn) { renderVerify(); verifyDrawn = true; }
+    update({ sliders: 'none' });
+  }
+  let verifyDrawn = false;
+
+  // ── 시간 (재생/정지) ──
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let playing = !reduceMotion;
+  let t = 0;               // 초. 프레임 = draw(벡터, t)
+  let lastNow = 0;
+  function syncPlay() {
+    $('play').textContent = playing ? '❚❚' : '▶';
+    $('play').setAttribute('aria-label', playing ? '일시정지' : '재생');
+  }
+  $('play').addEventListener('click', () => { playing = !playing; lastNow = 0; syncPlay(); drawFrame(); });
+  $('restart').addEventListener('click', () => { t = 0; drawFrame(); });
 
   // ── 렌더 ──
+  function renderTabs() {
+    const box = $('profile-tabs');
+    box.replaceChildren();
+    state.profiles.forEach((p, idx) => {
+      box.append(el('button', {
+        class: 'profile-tab', type: 'button', role: 'tab', 'aria-selected': String(idx === state.active),
+        onclick: () => { state.active = idx; update(); },
+      }, [el('span', { class: 'swatch', style: `background:${PROFILE_COLORS[idx]}` }), el('span', { class: 'nm', text: p.name || '(이름 없음)' })]));
+    });
+    if (state.profiles.length < MAX_PROFILES) {
+      box.append(el('button', { class: 'profile-tab add', type: 'button', text: '+ 비교 벡터', onclick: addProfile }));
+    }
+  }
+
   function renderPerfumeList() {
     const p = profile();
     const list = $('perfume-list');
     list.replaceChildren();
     p.perfumes.forEach((q, idx) => {
       const pp = E.computeParams(q);
+      const select = () => { p.sel = idx; update(); };
       const item = el('li', {
         class: 'perfume-item' + (idx === p.sel ? ' selected' : ''),
-        tabindex: 0, role: 'button', 'aria-pressed': idx === p.sel,
-        onclick: () => { p.sel = idx; update(); },
-        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); p.sel = idx; update(); } },
+        tabindex: 0, role: 'button', 'aria-pressed': String(idx === p.sel),
+        onclick: select,
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); } },
       }, [
-        el('span', { class: 'swatch', style: `background:${famColor(pp.dominant)}` }),
+        el('span', { class: 'swatch', style: `background:${F[pp.dominant].colors[0]}` }),
         el('span', { class: 'pname', text: q.name || '(이름 없음)' }),
-        el('span', { class: 'pmeta', text: `${pp.dominantName} · ${E.concentrationLabel(q.c).split(' (')[1].replace(')', '')}` }),
+        el('span', { class: 'pmeta', text: `${pp.dominantName} · ${shortConc(q.c)}` }),
       ]);
       if (p.perfumes.length > 1) {
         item.append(el('button', {
@@ -209,32 +257,49 @@
       }
       list.append(item);
     });
-    $('perfume-count').textContent = `${p.perfumes.length}개 · 평균이 취향 벡터`;
+    $('perfume-count').textContent = `${p.perfumes.length}개의 평균 = 취향 벡터`;
   }
+
+  /** 보이는(가중치 > 3%) 모션 레이어 목록, 지배 계열 먼저. */
+  const visibleLayers = (pp) => pp.layerAlpha.map((a, i) => [a, i]).filter(([a]) => a > 0.03).sort((x, y) => y[0] - x[0]);
 
   function syncSliders(mode) {
-    if (mode === 'none') return;
-    const q = perfume();
-    F.forEach((_, i) => {
-      if (mode !== 'except-family-' + i) famInputs[i].value = q.f[i];
-      famOutputs[i].textContent = pct(q.f[i]);
-      setTrackFill(famInputs[i]);
-    });
-    $('family-sum').textContent = `합계 ${fmt(q.f.reduce((a, b) => a + b, 0))}`;
-    ['c', 'l', 's'].forEach((k) => {
-      const input = $(`s-${k}`);
-      if (mode !== 'except-' + k) input.value = q[k];
-      $(`o-${k}`).textContent = fmt(q[k]);
-      setTrackFill(input);
-    });
-    $('c-label').textContent = `${E.concentrationLabel(q.c)} · 채도·불투명도`;
-    if (document.activeElement !== $('perfume-name')) $('perfume-name').value = q.name;
-    if (document.activeElement !== $('profile-name')) $('profile-name').value = profile().name;
+    const pp = paramsCache[state.active];
+    const v = pp.vector, m = pp.motion;
+    if (mode !== 'none') {
+      const q = perfume();
+      F.forEach((_, i) => {
+        if (mode !== 'except-family-' + i) famInputs[i].value = q.f[i];
+        famOutputs[i].textContent = pct(q.f[i]);
+        setTrackFill(famInputs[i]);
+      });
+      $('family-sum').textContent = `합계 ${fmt(q.f.reduce((a, b) => a + b, 0))}`;
+      ['c', 'l', 's'].forEach((k) => {
+        const input = $(`s-${k}`);
+        if (mode !== 'except-' + k) input.value = q[k];
+        $(`o-${k}`).textContent = fmt(q[k]);
+        setTrackFill(input);
+      });
+      if (document.activeElement !== $('perfume-name')) $('perfume-name').value = q.name;
+    }
+    // 그래픽에 실제 반영된 값 (취향 평균 기준)
+    const S = HERO_SIZE[0];
+    const counts = visibleLayers(pp).map(([, i]) => `${F[i].motion.label} <b>${Math.max(1, Math.round(m.counts[i]))}</b>`).join(' · ');
+    $('e-c').innerHTML = `평균 ${fmt(v.c)} (${shortConc(v.c)}) → 채도 <b>×${fmt(pp.color.chromaScale)}</b> · 불투명도 <b>${fmt(pp.opacity)}</b> · 선 밀도 <b>${pct(pp.detail)}</b> · 흐림 <b>${fmt(pp.blur * S, 1)}px</b>`;
+    $('e-l').innerHTML = `평균 ${fmt(v.l)} → 모션 속도 <b>×${fmt(m.speed)}</b> · 잔상 길이 <b>${pct(m.trail)}</b> · 선 <b>${m.gap * S < 0.8 ? '이어짐' : '끊김'}</b>`;
+    $('e-s').innerHTML = `평균 ${fmt(v.s)} → 확산 반경 <b>${fmt(pp.spread.radius)}</b> · 움직임 폭 <b>×${fmt(m.amplitude)}</b><br>반복: ${counts}`;
   }
 
-  function renderTaste() {
-    const v = tasteOf(profile());
-    const p = E.computeParams(v);
+  function renderSide() {
+    const p = profile();
+    const pp = paramsCache[state.active];
+    const v = pp.vector;
+    $('hero-name').textContent = p.name || '(이름 없음)';
+    $('profile-dot').style.background = PROFILE_COLORS[state.active];
+    $('profile-dot-2').style.background = PROFILE_COLORS[state.active];
+    if (document.activeElement !== $('profile-name')) $('profile-name').value = p.name;
+    $('hero-canvas').setAttribute('aria-label', `${p.name}의 취향 모션 그래픽: 기본 톤 ${pp.dominantName}`);
+
     const box = $('taste-vector');
     box.replaceChildren();
     const bar = el('div', { class: 'bar', role: 'img', 'aria-label': '계열 비중 막대' });
@@ -243,46 +308,49 @@
     });
     box.append(bar);
     F.forEach((fam, i) => {
-      box.append(el('span', { class: 'k' }, [el('span', { class: 'swatch', style: `background:${fam.colors[0]}` }), fam.name]));
-      box.append(el('span', { class: 'v', text: fmt(v.f[i], 3) }));
+      box.append(el('span', { class: 'k' }, [el('span', { class: 'swatch', style: `background:${fam.colors[0]}` }), fam.name.replace('/아쿠아틱', '')]));
+      box.append(el('span', { class: 'v', text: fmt(v.f[i]) }));
     });
     [['농도', v.c], ['지속력', v.l], ['실라주', v.s]].forEach(([k, x]) => {
-      box.append(el('span', { class: 'k', text: k }), el('span', { class: 'v', text: fmt(x, 3) }));
+      box.append(el('span', { class: 'k', text: k }), el('span', { class: 'v', text: fmt(x) }));
+    });
+
+    const lt = $('layer-table');
+    lt.replaceChildren();
+    pp.layerAlpha.map((a, i) => [a, i]).sort((x, y) => y[0] - x[0]).forEach(([a, i]) => {
+      const fam = F[i];
+      lt.append(el('div', { class: 'layer-row' + (a > 0.03 ? '' : ' off') }, [
+        el('span', { class: 'swatch', style: `background:${E.rgbCss(pp.color.palettes[i].bg)}; box-shadow: inset 0 0 0 2px ${E.rgbCss(pp.color.palettes[i].line)}` }),
+        el('span', { class: 'nm' }, [fam.name, el('small', { text: `${fam.motion.label} × ${Math.max(1, Math.round(pp.motion.counts[i]))}` })]),
+        el('span', { class: 'v', text: a > 0.03 ? pct(a) : '숨김' }),
+        el('span', { class: 'meter' }, [el('i', { style: `width:${a * 100}%;background:${fam.colors[0]}` })]),
+      ]));
     });
 
     const ro = $('param-readout');
     ro.replaceChildren();
-    const rows = [
-      ['기본 톤', `${p.dominantName} (${pct(p.weights[p.dominant])})`],
-      ['채도 배율', `×${fmt(p.color.chromaScale)}`],
-      ['레이어 불투명도', fmt(p.opacity)],
-      ['흐림', `${fmt(p.blur * CANVAS_SIZE, 1)}px`],
-      ['잔상 트레일', fmt(p.trail.count + p.trail.frac, 1)],
-      ['선 끊김 간격', `${fmt(p.stroke.gap * CANVAS_SIZE, 1)}px`],
-      ['확산 반경', fmt(p.spread.radius, 3)],
-      ['확산 입자', Math.round(p.spread.particles)],
-      ['응축 지수', fmt(p.spread.exponent)],
-    ];
-    rows.forEach(([k, x]) => ro.append(el('span', { text: k }), el('span', { class: 'v', text: String(x) })));
+    [
+      ['기본 톤', `${pp.dominantName} ${pct(pp.weights[pp.dominant])}`],
+      ['모션 속도', `×${fmt(pp.motion.speed)}`],
+      ['잔상 길이', pct(pp.motion.trail)],
+      ['확산 반경', fmt(pp.spread.radius)],
+      ['움직임 폭', `×${fmt(pp.motion.amplitude)}`],
+      ['채도', `×${fmt(pp.color.chromaScale)}`],
+      ['불투명도', fmt(pp.opacity)],
+    ].forEach(([k, x]) => ro.append(el('span', { text: k }), el('span', { class: 'v', text: String(x) })));
   }
 
-  const canvases = new Map();
+  const cardCanvases = [];
   function renderCards() {
     const wrap = $('cards');
-    wrap.dataset.count = state.profiles.length;
     wrap.replaceChildren();
     state.profiles.forEach((p, idx) => {
-      let canvas = canvases.get(idx);
-      if (!canvas) {
-        canvas = el('canvas', { width: CANVAS_SIZE, height: CANVAS_SIZE });
-        canvases.set(idx, canvas);
-      }
-      canvas.setAttribute('role', 'img');
-      const v = tasteOf(p);
-      const pp = E.computeParams(v);
+      if (!cardCanvases[idx]) cardCanvases[idx] = el('canvas', { width: CARD_SIZE[0], height: CARD_SIZE[1], role: 'img' });
+      const canvas = cardCanvases[idx];
+      const pp = paramsCache[idx];
+      const v = pp.vector;
       canvas.setAttribute('aria-label', `${p.name}의 취향 그래픽: 기본 톤 ${pp.dominantName}`);
       canvas.onclick = () => { state.active = idx; update(); };
-      R.render(canvas, pp);
 
       const actions = el('div', { class: 'card-actions' }, [
         idx !== state.active ? el('button', { class: 'btn small', type: 'button', text: '편집', onclick: () => { state.active = idx; update(); } }) : null,
@@ -293,11 +361,11 @@
             state.profiles.push(c); state.active = state.profiles.length - 1; update();
           },
         }) : null,
-        el('button', {
+        IS_ARTIFACT ? null : el('button', {
           class: 'btn small', type: 'button', text: 'PNG',
           onclick: () => {
             const a = document.createElement('a');
-            a.download = `scent-${p.name.replace(/\s+/g, '_')}.png`;
+            a.download = `scent-${p.name.replace(/\s+/g, '_')}-t${fmt(t, 1)}.png`;
             a.href = canvas.toDataURL('image/png');
             a.click();
           },
@@ -306,7 +374,7 @@
           class: 'btn small', type: 'button', text: '삭제',
           onclick: () => {
             state.profiles.splice(idx, 1);
-            canvases.clear();
+            cardCanvases.length = 0;
             state.active = Math.min(state.active, state.profiles.length - 1);
             update();
           },
@@ -319,15 +387,13 @@
           el('div', { class: 'card-title' }, [
             el('span', { class: 'swatch', style: `background:${PROFILE_COLORS[idx]}` }),
             el('strong', { text: p.name || '(이름 없음)' }),
-            el('span', { class: 'tag', text: `${pp.dominantName} · ${E.concentrationLabel(v.c).split(' (')[1].replace(')', '')}` }),
+            el('span', { class: 'tag', text: `${pp.dominantName} · ${shortConc(v.c)}` }),
           ]),
           el('div', { class: 'card-vec', text: `[${v.f.map((x) => fmt(x)).join(', ')}] · c ${fmt(v.c)} · l ${fmt(v.l)} · s ${fmt(v.s)}` }),
           actions,
         ]),
       ]));
     });
-    $('add-profile').disabled = state.profiles.length >= MAX_PROFILES;
-    $('profile-dot').style.background = PROFILE_COLORS[state.active];
   }
 
   function meterCell(x) {
@@ -335,15 +401,15 @@
   }
 
   function renderSimilarity() {
-    const t = $('sim-table');
-    t.replaceChildren();
+    const tb0 = $('sim-table');
+    tb0.replaceChildren();
     if (state.profiles.length < 2) {
-      t.append(el('tbody', {}, [el('tr', {}, [el('td', { class: 'empty', text: '비교할 벡터를 하나 더 추가하세요.' })])]));
+      tb0.append(el('tbody', {}, [el('tr', {}, [el('td', { class: 'empty', text: '위의 “+ 비교 벡터”로 프로필을 하나 더 추가하세요.' })])]));
       return;
     }
-    t.append(el('thead', {}, [el('tr', {}, ['비교 쌍', '계열 코사인', '형태', '색상', '확산 범위', '강도'].map((h) => el('th', { scope: 'col', text: h })))]));
+    tb0.append(el('thead', {}, [el('tr', {}, ['비교 쌍', '계열 코사인', '형태', '색상', '확산 범위', '강도'].map((h) => el('th', { scope: 'col', text: h })))]));
     const tb = el('tbody');
-    const vs = state.profiles.map(tasteOf);
+    const vs = paramsCache.map((pp) => pp.vector);
     for (let i = 0; i < vs.length; i++) {
       for (let j = i + 1; j < vs.length; j++) {
         const r = E.compare(vs[i], vs[j]);
@@ -356,7 +422,26 @@
         ]));
       }
     }
-    t.append(tb);
+    tb0.append(tb);
+  }
+
+  function drawFrame() {
+    $('clock').textContent = `t = ${fmt(t, 1)}s · 같은 벡터와 같은 t는 항상 같은 프레임`;
+    if (view === 'single') R.draw($('hero-canvas'), paramsCache[state.active], t);
+    else if (view === 'compare') paramsCache.forEach((pp, i) => cardCanvases[i] && R.draw(cardCanvases[i], pp, t));
+  }
+
+  // 약 30fps로 제한한 애니메이션 루프
+  let lastDraw = 0;
+  function loop(now) {
+    if (playing) {
+      if (lastNow) t += Math.min(0.1, (now - lastNow) / 1000);
+      lastNow = now;
+      if (now - lastDraw > 30) { lastDraw = now; drawFrame(); }
+    } else {
+      lastNow = 0;
+    }
+    requestAnimationFrame(loop);
   }
 
   // ── 검증 산점도 ──
@@ -422,28 +507,31 @@
     });
   }
 
-  let frame = 0;
-  let pending = {};
+  let pending = null;
+  let frameReq = 0;
   function update(opts = {}) {
     pending = opts;
-    if (frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
+    if (frameReq) return;
+    frameReq = requestAnimationFrame(() => {
+      frameReq = 0;
       const o = pending;
+      refreshParams();
       syncSliders(o.sliders || 'all');
+      renderTabs();
       renderPerfumeList();
-      renderTaste();
-      renderCards();
-      renderSimilarity();
+      renderSide();
+      if (view === 'compare') { renderCards(); renderSimilarity(); }
+      drawFrame();
       saveHash();
     });
   }
 
   window.addEventListener('hashchange', () => {
     const s = decodeState(location.hash.slice(1));
-    if (s && encodeState(compactState()) !== location.hash.slice(1)) { state = s; canvases.clear(); update(); }
+    if (s && encodeState(compactState()) !== location.hash.slice(1)) { state = s; cardCanvases.length = 0; update(); }
   });
 
-  renderVerify();
+  syncPlay();
   update();
+  requestAnimationFrame(loop);
 })();

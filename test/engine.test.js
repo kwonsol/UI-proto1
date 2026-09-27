@@ -46,15 +46,27 @@ test('형태 유사도는 해석적으로 1 − √(1 − cos), 색상 유사도
   }
 });
 
-test('농도·지속력·실라주 매핑 방향', () => {
+test('농도·지속력·실라주 → 모션 매핑 방향', () => {
   const at = (o) => E.computeParams({ f: [0.2, 0.2, 0.2, 0.2, 0.2], c: 0.5, l: 0.5, s: 0.5, ...o });
+  // 농도: 채도·불투명도·선 밀도 ↑, 흐림 ↓
   assert.ok(at({ c: 1 }).opacity > at({ c: 0 }).opacity);
   assert.ok(at({ c: 1 }).color.chromaScale > at({ c: 0 }).color.chromaScale);
+  assert.ok(at({ c: 1 }).detail > at({ c: 0 }).detail);
   assert.ok(at({ c: 1 }).blur < at({ c: 0 }).blur);
-  assert.ok(at({ l: 1 }).trail.count > at({ l: 0 }).trail.count);
-  assert.ok(at({ l: 1 }).stroke.gap < at({ l: 0 }).stroke.gap);
+  // 지속력: 느린 모션, 긴 잔상, 끊김 없음
+  assert.ok(at({ l: 1 }).motion.speed < at({ l: 0 }).motion.speed);
+  assert.ok(at({ l: 1 }).motion.trail > at({ l: 0 }).motion.trail);
+  assert.ok(at({ l: 1 }).motion.gap === 0 && at({ l: 0 }).motion.gap > 0);
+  // 실라주: 확산 반경·반복 횟수·움직임 폭 ↑
   assert.ok(at({ s: 1 }).spread.radius > at({ s: 0 }).spread.radius);
-  assert.ok(at({ s: 1 }).spread.exponent < at({ s: 0 }).spread.exponent);
+  assert.ok(at({ s: 1 }).motion.amplitude > at({ s: 0 }).motion.amplitude);
+  at({ s: 1 }).motion.counts.forEach((n, i) => assert.ok(n > at({ s: 0 }).motion.counts[i]));
+});
+
+test('지배 계열의 모션 레이어가 가장 진하다', () => {
+  const p = E.computeParams({ f: [0.1, 0.5, 0.2, 0.1, 0.1], c: 0.5, l: 0.5, s: 0.5 });
+  assert.strictEqual(p.layerAlpha[1], 1);
+  p.layerAlpha.forEach((a, i) => { if (i !== 1) assert.ok(a < 1); });
 });
 
 test('엔진에 난수 호출이 없다', () => {

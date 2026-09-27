@@ -13,13 +13,26 @@
   'use strict';
 
   // ── 계열 정의 ─────────────────────────────────────────────
-  // colors: [주 톤, 보조 톤]. k: 형태 고조파 주파수(계열마다 서로 달라야 직교).
+  // colors: [주 톤, 보조 톤] — 스와치·색 구성 지표용.
+  // palette: 모션 그래픽 2톤 팔레트 (바탕 bg, 채움 fill, 선 line, 강조 accent).
+  // motion: 모션 종류와 반복 횟수 = base + range·실라주.
+  // k: 확산 경계 r(θ)의 고조파 주파수(계열마다 서로 달라야 직교).
   const FAMILIES = [
-    { key: 'floral',   name: '플로럴',        colors: ['#F7B5CC', '#BFA8EE'], k: 5, phase: 0.0 },
-    { key: 'woody',    name: '우디',          colors: ['#7E4A2A', '#8F8752'], k: 3, phase: 0.9 },
-    { key: 'oriental', name: '오리엔탈',      colors: ['#8E1A3E', '#B98B2C'], k: 2, phase: 1.7 },
-    { key: 'citrus',   name: '시트러스',      colors: ['#F6DC3A', '#A6DB35'], k: 7, phase: 2.6 },
-    { key: 'green',    name: '그린/아쿠아틱', colors: ['#8EE6C6', '#4A9EDC'], k: 4, phase: 3.4 },
+    { key: 'floral', name: '플로럴', colors: ['#F7B5CC', '#BFA8EE'], k: 5, phase: 0.0,
+      palette: { bg: '#B7A1E4', fill: '#F9C6D8', line: '#FFF3F7', accent: '#F59BC0' },
+      motion: { kind: 'shell', label: '꽃잎 부채', base: 1, range: 6 } },
+    { key: 'woody', name: '우디', colors: ['#7E4A2A', '#8F8752'], k: 3, phase: 0.9,
+      palette: { bg: '#8C8350', fill: '#EEDFC0', line: '#2E1C10', accent: '#B07A4A' },
+      motion: { kind: 'fiber', label: '나뭇결 섬유', base: 48, range: 216 } },
+    { key: 'oriental', name: '오리엔탈', colors: ['#8E1A3E', '#B98B2C'], k: 2, phase: 1.7,
+      palette: { bg: '#5C0F25', fill: '#9E2346', line: '#E2B24C', accent: '#F6DC96' },
+      motion: { kind: 'smoke', label: '연기 리본', base: 3, range: 9 } },
+    { key: 'citrus', name: '시트러스', colors: ['#F6DC3A', '#A6DB35'], k: 7, phase: 2.6,
+      palette: { bg: '#ECEAE2', fill: '#D9F33F', line: '#F2A900', accent: '#F4E23A' },
+      motion: { kind: 'blob', label: '과즙 방울', base: 4, range: 12 } },
+    { key: 'green', name: '그린/아쿠아틱', colors: ['#8EE6C6', '#4A9EDC'], k: 4, phase: 3.4,
+      palette: { bg: '#1C78AE', fill: '#57C9B8', line: '#A9F4DA', accent: '#E3FFF4' },
+      motion: { kind: 'ripple', label: '물결 파문', base: 1, range: 5 } },
   ];
 
   const CONCENTRATIONS = [
@@ -179,8 +192,7 @@
 
   // ── 확산 (실라주) ─────────────────────────────────────────
   // 캔버스 한 변을 1로 두는 정규화 좌표.
-  const spreadRadius = (s) => 0.2 + 0.25 * s;  // 확산 반경(할로)
-  const coreRadius = (s) => 0.13 + 0.06 * s;   // 코어 반경
+  const spreadRadius = (s) => 0.22 + 0.58 * s;  // 확산 경계 반경 (캔버스 짧은 변 대비)
 
   // ── 파라미터 계산 ─────────────────────────────────────────
   function computeParams(input) {
@@ -196,11 +208,25 @@
     const primaryLab = applyConcentration(baseLab[0], c);
     const secondaryLab = applyConcentration(baseLab[1], c);
 
-    const trailRaw = l * 12;
+    // 레이어 가중치: 지배 계열 = 1, 나머지는 구성 비율에 따라 옅게.
+    const wMax = Math.max(...weights);
+    const layerAlpha = weights.map((w) => Math.pow(w / wMax, 0.7));
+    const tone = (hex) => oklabToRgb(applyConcentration(rgbToOklab(hexToRgb(hex)), c));
+    const palettes = FAMILIES.map((fam) => ({
+      bg: tone(fam.palette.bg), fill: tone(fam.palette.fill),
+      line: tone(fam.palette.line), accent: tone(fam.palette.accent),
+    }));
+    const bgLab = [0, 0, 0];
+    FAMILIES.forEach((fam, i) => {
+      const lab = applyConcentration(rgbToOklab(hexToRgb(fam.palette.bg)), c);
+      for (let j = 0; j < 3; j++) bgLab[j] += weights[i] * lab[j];
+    });
+
     return {
       vector: v,
       u,
       weights,
+      layerAlpha,
       dominant,
       dominantName: FAMILIES[dominant].name,
       color: {
@@ -210,28 +236,22 @@
         primary: oklabToRgb(primaryLab),
         secondary: oklabToRgb(secondaryLab),
         chromaScale: 0.5 + 0.65 * c,
+        background: oklabToRgb(bgLab),
+        palettes,
       },
-      opacity: 0.16 + 0.72 * c,        // 레이어 불투명도
-      blur: (1 - c) * 0.022,           // 흐림 (캔버스 비율)
-      layers: 6,
-      trail: {
-        count: Math.floor(trailRaw),   // 잔상 개수
-        frac: trailRaw - Math.floor(trailRaw), // 마지막 잔상의 부분 알파 → 연속적 변화
-        rotate: 0.05,                  // 잔상 간 회전 (rad)
-        grow: 0.028,                   // 잔상 간 확대
-        decay: 1.4,
-      },
-      stroke: {
-        gap: 0.03 * Math.pow(1 - l, 1.6),   // 끊김 간격 (캔버스 비율) — 짧을수록 크게
-        dash: 0.008 + 0.05 * l,             // 선분 길이
-        width: 0.0022 + 0.0022 * (1 - l),   // 짧을수록 또렷한 선
+      opacity: 0.35 + 0.65 * c,          // 레이어 불투명도
+      blur: (1 - c) * 0.007,             // 흐림 (캔버스 비율)
+      detail: c,                          // 선 밀도·굵기
+      motion: {
+        speed: 1.6 - 1.3 * l,             // 모션 배속 — 지속력이 길수록 느리고 오래 머무름
+        trail: l,                         // 잔상 길이 0–1
+        gap: 0.03 * Math.pow(Math.max(0, (0.6 - l) / 0.6), 1.5), // 선 끊김 간격 — 지속력 0.6 이상이면 이어진 선
+        dash: 0.01 + 0.05 * l,            // 끊긴 선분 길이
+        amplitude: 0.5 + 0.8 * s,         // 움직임 폭
+        counts: FAMILIES.map((fam) => fam.motion.base + fam.motion.range * s), // 반복 횟수(실수)
       },
       spread: {
-        core: coreRadius(s),
-        radius: spreadRadius(s),
-        particles: 70 + 520 * s,            // 실수 — 마지막 입자는 부분 알파
-        exponent: 0.5 + 1.6 * (1 - s),      // (i/N)^p, 클수록 중심에 응축
-        glow: 0.08 + 0.3 * s,
+        radius: spreadRadius(s),          // 확산 경계 반경
       },
       shape: shapeSamples(u),
     };
@@ -329,7 +349,7 @@
   }
 
   const api = {
-    FAMILIES, CONCENTRATIONS, SHAPE_AMPLITUDE,
+    FAMILIES, CONCENTRATIONS, SHAPE_AMPLITUDE, spreadRadius,
     normalizeFamilies, sanitize, meanVector, cosine, unitDirection,
     computeParams, shapeRadius, compare, shapeSimilarity, colorSimilarity, spreadSimilarity,
     samplePairs, spearman, pickFamily, familyColor, concentrationLabel, rgbCss, oklabToRgb,
