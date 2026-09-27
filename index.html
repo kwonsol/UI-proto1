@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scent Vector</title>
+  <meta name="description" content="향수 노트 벡터로 향 취향을 결정론적으로 시각화하는 프로토타입" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>Scent Vector</h1>
+        <p>향수 벡터의 평균 → 취향 벡터 → 결정론적 그래픽</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="copy-link" class="btn ghost" type="button">링크 복사</button>
+      <button id="reset" class="btn ghost" type="button">초기화</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 왼쪽: 편집 패널 -->
+    <aside class="panel controls" aria-label="벡터 편집">
+      <section class="block">
+        <div class="block-head">
+          <h2>프로필</h2>
+          <span class="profile-dot" id="profile-dot"></span>
+        </div>
+        <input id="profile-name" class="text-input" type="text" maxlength="24" aria-label="프로필 이름" />
+      </section>
+
+      <section class="block">
+        <div class="block-head">
+          <h2>사용한 향수</h2>
+          <span class="muted" id="perfume-count"></span>
+        </div>
+        <ul id="perfume-list" class="perfume-list"></ul>
+        <div class="add-row">
+          <select id="preset-select" class="select" aria-label="프리셋 향수">
+            <option value="">프리셋에서 추가…</option>
+          </select>
+          <button id="add-blank" class="btn" type="button">+ 새 향수</button>
+        </div>
+      </section>
+
+      <section class="block">
+        <div class="block-head">
+          <h2>편집 중인 향수</h2>
+        </div>
+        <input id="perfume-name" class="text-input" type="text" maxlength="32" aria-label="향수 이름" />
+
+        <h3 class="sub">계열 비중 <span class="muted" id="family-sum"></span></h3>
+        <div id="family-sliders" class="sliders"></div>
+
+        <h3 class="sub">특성</h3>
+        <div class="sliders">
+          <div class="slider-row">
+            <label for="s-c">농도</label>
+            <input id="s-c" type="range" min="0" max="1" step="0.01" />
+            <output id="o-c"></output>
+            <span class="hint" id="c-label"></span>
+          </div>
+          <div class="slider-row">
+            <label for="s-l">지속력</label>
+            <input id="s-l" type="range" min="0" max="1" step="0.01" />
+            <output id="o-l"></output>
+            <span class="hint">짧음 → 김 · 잔상 트레일</span>
+          </div>
+          <div class="slider-row">
+            <label for="s-s">실라주</label>
+            <input id="s-s" type="range" min="0" max="1" step="0.01" />
+            <output id="o-s"></output>
+            <span class="hint">약함 → 강함 · 확산 반경</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="block">
+        <div class="block-head">
+          <h2>취향 벡터</h2>
+          <span class="muted">향수 벡터 평균 · 그래픽의 유일한 입력</span>
+        </div>
+        <div id="taste-vector" class="vector-table"></div>
+        <div id="param-readout" class="param-readout"></div>
+      </section>
+    </aside>
+
+    <!-- 오른쪽: 그래픽 및 비교 -->
+    <section class="stage" aria-label="생성된 그래픽">
+      <div class="stage-head">
+        <h2>그래픽 비교</h2>
+        <button id="add-profile" class="btn primary" type="button">+ 비교 벡터 추가</button>
+      </div>
+      <div id="cards" class="cards"></div>
+
+      <div class="panel">
+        <div class="block-head">
+          <h2>유사도</h2>
+          <span class="muted">계열 코사인 유사도와 그래픽 유사도</span>
+        </div>
+        <div class="table-wrap">
+          <table id="sim-table" class="sim-table"></table>
+        </div>
+        <p class="note">
+          형태 = r(θ) 곡선 간 RMS 거리 기반 · 색상 = 계열 색 구성 비율의 바타차리야 계수 ·
+          확산 = 할로 경계 ρ(θ) 간 RMS 거리 기반. 세 지표 모두 코사인 유사도가 커지면 함께 커지도록(단조) 설계되어 있습니다.
+          강도 유사도는 농도·지속력·실라주 차이입니다.
+        </p>
+      </div>
+
+      <details class="panel verify">
+        <summary>
+          <h2>매핑 검증</h2>
+          <span class="muted">표본 400쌍 · 농도·지속력·실라주 0.5 고정, 계열 비중만 변화</span>
+        </summary>
+        <div id="verify-charts" class="verify-charts"></div>
+      </details>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip" role="status" hidden></div>
+
+  <script src="js/engine.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
